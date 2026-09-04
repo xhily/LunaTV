@@ -19,19 +19,20 @@ export function cn(...inputs: ClassValue[]) {
 const userAgent = typeof navigator !== 'undefined' ? navigator.userAgent : '';
 
 // iOS 设备检测 (包括 iPad 的新版本检测)
-const isIOS = /iPad|iPhone|iPod/i.test(userAgent) && !(window as any).MSStream;
+const isIOS = typeof window !== 'undefined' && /iPad|iPhone|iPod/i.test(userAgent) && !(window as any).MSStream;
 const isIOS13Plus = isIOS || (
-  userAgent.includes('Macintosh') && 
-  typeof navigator !== 'undefined' && 
+  typeof window !== 'undefined' &&
+  userAgent.includes('Macintosh') &&
+  typeof navigator !== 'undefined' &&
   navigator.maxTouchPoints >= 1
 );
 
 // iPad 专门检测 (包括新的 iPad Pro)
-const isIPad = /iPad/i.test(userAgent) || (
-  userAgent.includes('Macintosh') && 
-  typeof navigator !== 'undefined' && 
+const isIPad = typeof window !== 'undefined' && (/iPad/i.test(userAgent) || (
+  userAgent.includes('Macintosh') &&
+  typeof navigator !== 'undefined' &&
   navigator.maxTouchPoints > 2
-);
+));
 
 // Android 设备检测
 const isAndroid = /Android/i.test(userAgent);
@@ -40,8 +41,8 @@ const isAndroid = /Android/i.test(userAgent);
 const isMobile = isIOS13Plus || isAndroid || /webOS|BlackBerry|IEMobile|Opera Mini/i.test(userAgent);
 
 // 平板设备检测
-const isTablet = isIPad || (isAndroid && !/Mobile/i.test(userAgent)) || 
-  (typeof screen !== 'undefined' && screen.width >= 768);
+const isTablet = isIPad || (isAndroid && !/Mobile/i.test(userAgent)) ||
+  (typeof window !== 'undefined' && typeof screen !== 'undefined' && screen.width >= 768);
 
 // Safari 浏览器检测 (更精确)
 const isSafari = /^(?:(?!chrome|android).)*safari/i.test(userAgent) && !isAndroid;
@@ -52,10 +53,10 @@ const isWebKit = /WebKit/i.test(userAgent);
 // 设备性能等级估算
 const getDevicePerformanceLevel = (): 'low' | 'medium' | 'high' => {
   if (typeof navigator === 'undefined') return 'medium';
-  
+
   // 基于硬件并发数判断
   const cores = navigator.hardwareConcurrency || 4;
-  
+
   if (isMobile) {
     return cores >= 6 ? 'medium' : 'low';
   } else {
@@ -63,7 +64,7 @@ const getDevicePerformanceLevel = (): 'low' | 'medium' | 'high' => {
   }
 };
 
-const devicePerformance = getDevicePerformanceLevel();
+const devicePerformance = typeof window !== 'undefined' ? getDevicePerformanceLevel() : 'medium';
 
 // 导出设备检测结果供其他模块使用
 export {
@@ -78,6 +79,26 @@ export {
   devicePerformance,
   getDevicePerformanceLevel
 };
+
+function getBangumiImageProxyConfig(): {
+  proxyType: 'server' | 'cmliussss' | 'corsapi' | 'sakura' | 'custom' | 'direct';
+  proxyUrl: string;
+} {
+  let bangumiImageProxyType: 'server' | 'cmliussss' | 'corsapi' | 'sakura' | 'custom' | 'direct' = 'server';
+  let bangumiImageProxyUrl = '';
+
+  if (typeof window !== 'undefined' && typeof localStorage !== 'undefined') {
+    const storedType = localStorage.getItem('bangumiImageProxyType');
+    const runtimeType = (window as any).RUNTIME_CONFIG?.BANGUMI_IMAGE_PROXY_TYPE;
+    bangumiImageProxyType = (storedType || runtimeType || 'server') as 'server' | 'cmliussss' | 'corsapi' | 'sakura' | 'custom' | 'direct';
+    bangumiImageProxyUrl =
+      localStorage.getItem('bangumiImageProxyUrl') ||
+      (window as any).RUNTIME_CONFIG?.BANGUMI_IMAGE_PROXY ||
+      '';
+  }
+
+  return { proxyType: bangumiImageProxyType, proxyUrl: bangumiImageProxyUrl };
+}
 
 function getDoubanImageProxyConfig(): {
   proxyType:
@@ -132,6 +153,30 @@ export function processImageUrl(originalUrl: string): string {
     return `/api/image-proxy?url=${encodeURIComponent(originalUrl)}`;
   }
 
+  // Bangumi 图片代理（lain.bgm.tv 在国内无法直接访问）
+  if (originalUrl.includes('lain.bgm.tv') || originalUrl.includes('bgm.tv/pic')) {
+    const { proxyType: bangumiProxyType, proxyUrl: bangumiProxyUrl } = getBangumiImageProxyConfig();
+    switch (bangumiProxyType) {
+      case 'cmliussss':
+        return originalUrl.replace(/lain\.bgm\.tv/g, 'img.doubanio.cmliussss.net');
+      case 'sakura':
+        // 桜色镜像站：全域名镜像 bgm.tv -> bangumi.lol
+        return originalUrl.replace(/lain\.bgm\.tv/g, 'lain.bangumi.lol').replace(/bgm\.tv/g, 'bangumi.lol');
+      case 'corsapi': {
+        const base = bangumiProxyUrl || 'https://corsapi.smone.workers.dev';
+        return `${base.replace(/\/$/, '')}/?url=${encodeURIComponent(originalUrl)}`;
+      }
+      case 'custom':
+        if (bangumiProxyUrl) return `${bangumiProxyUrl}${encodeURIComponent(originalUrl)}`;
+        return `/api/proxy/logo?url=${encodeURIComponent(originalUrl)}`;
+      case 'direct':
+        return originalUrl;
+      case 'server':
+      default:
+        return `/api/proxy/logo?url=${encodeURIComponent(originalUrl)}`;
+    }
+  }
+
   // 仅处理豆瓣图片代理
   if (!originalUrl.includes('doubanio.com')) {
     return originalUrl;
@@ -163,16 +208,98 @@ export function processImageUrl(originalUrl: string): string {
   }
 }
 
-/**
- * 从m3u8地址获取视频质量等级和网络信息
- * @param m3u8Url m3u8播放列表的URL
- * @returns Promise<{quality: string, loadSpeed: string, pingTime: number}> 视频质量等级和网络信息
- */
-export async function getVideoResolutionFromM3u8(m3u8Url: string): Promise<{
+// ============ 新增：增强的视频源测试类型（向后兼容） ============
+export type VideoSourceTestStatus = 'ok' | 'partial' | 'failed';
+
+export interface VideoSourceTestResult {
   quality: string;
   loadSpeed: string;
   pingTime: number;
-}> {
+  speedKBps?: number;        // 新增：数值型速度，便于计算
+  hasError?: boolean;        // 新增：是否有错误
+  status?: VideoSourceTestStatus;  // 新增：测试状态
+  message?: string;          // 新增：详细消息
+  playable?: boolean;        // 新增：是否可播放
+  testedAt?: number;         // 新增：测试时间戳
+}
+
+// 视频播放代理配置（Cloudflare Worker 加速播放流，与 VideoProxyConfig 共用同一开关）
+function getVideoPlayProxyConfig(): { enabled: boolean; proxyUrl: string } {
+  if (typeof window === 'undefined') return { enabled: false, proxyUrl: '' };
+  const rc = (window as any).RUNTIME_CONFIG;
+  return {
+    enabled: !!rc?.VIDEO_PROXY_ENABLED,
+    proxyUrl: (rc?.VIDEO_PROXY_URL || '').replace(/\/$/, ''),
+  };
+}
+
+// 把真实播放地址包一层 Cloudflare Worker 代理（m3u8 走 /m3u8 端点，自动重写 .ts 子链接；其他格式走通用 /?url= 端点）
+export function applyVideoPlayProxy(url: string): string {
+  if (!url || !/^https?:\/\//i.test(url)) return url;
+
+  const { enabled, proxyUrl } = getVideoPlayProxyConfig();
+  if (!enabled || !proxyUrl) return url;
+
+  // 已经代理过，避免套娃
+  if (url.startsWith(proxyUrl)) return url;
+
+  const isM3u8 = /\.m3u8(\?|#|$)/i.test(url);
+  const endpoint = isM3u8 ? '/m3u8' : '/';
+  return `${proxyUrl}${endpoint}?url=${encodeURIComponent(url)}`;
+}
+
+// Worker 代理请求失败（超时/502等）时，从代理地址还原出真实地址，用于自动降级直连
+export function stripVideoPlayProxy(url: string): string | null {
+  if (!url) return null;
+  const { proxyUrl } = getVideoPlayProxyConfig();
+  if (!proxyUrl || !url.startsWith(proxyUrl)) return null;
+
+  try {
+    const parsed = new URL(url);
+    const raw = parsed.searchParams.get('url');
+    return raw ? decodeURIComponent(raw) : null;
+  } catch {
+    return null;
+  }
+}
+
+// 直连原始地址失败（上游要求特定 Referer/UA 或不返回 CORS 头）时，最后一层兜底：
+// 改走本站自带的 /api/proxy/m3u8，由服务端代为请求并改写分片/密钥 URI。
+// 与 applyVideoPlayProxy 的外部 Worker 相互独立，不依赖 VideoProxyConfig 是否启用。
+export function applyFirstPartyM3u8Proxy(url: string): string {
+  if (!url || typeof window === 'undefined') return url;
+  return `/api/proxy/m3u8?url=${encodeURIComponent(url)}`;
+}
+
+// 判断某地址是否已经指向本站的第一方 m3u8 代理，避免重复包裹
+export function isFirstPartyM3u8Proxy(url: string): boolean {
+  return !!url && url.startsWith('/api/proxy/m3u8?url=');
+}
+
+// 新增：格式化速度显示
+export function formatVideoLoadSpeed(speedKBps?: number): string {
+  if (!speedKBps || !Number.isFinite(speedKBps) || speedKBps <= 0) {
+    return '未知';
+  }
+  if (speedKBps >= 1024) {
+    return `${(speedKBps / 1024).toFixed(1)} MB/s`;
+  }
+  return `${speedKBps.toFixed(1)} KB/s`;
+}
+// ============ 结束新增类型 ============
+
+/**
+ * 从m3u8地址获取视频质量等级和网络信息
+ * @param m3u8Url m3u8播放列表的URL
+ * @param options 配置选项
+ * @param options.timeoutMs 超时时间（毫秒），默认 5000ms
+ * @returns Promise<VideoSourceTestResult> 视频质量等级和网络信息（向后兼容）
+ */
+export async function getVideoResolutionFromM3u8(
+  m3u8Url: string,
+  options: { timeoutMs?: number } = {}
+): Promise<VideoSourceTestResult> {
+  const { timeoutMs = 5000 } = options;
   try {
     // 检测是否为iPad（无论什么浏览器）
     const isIPad = /iPad/i.test(userAgent);
@@ -193,13 +320,23 @@ export async function getVideoResolutionFromM3u8(m3u8Url: string): Promise<{
         return {
           quality: '未知', // iPad不检测视频质量避免崩溃
           loadSpeed: '未知', // iPad不检测下载速度
-          pingTime
+          pingTime,
+          status: 'partial',
+          message: 'iPad 简化测速',
+          hasError: false,
+          playable: false,
+          testedAt: Date.now(),
         };
       } catch (error) {
         return {
           quality: '未知',
           loadSpeed: '未知',
-          pingTime: 9999
+          pingTime: 9999,
+          status: 'failed',
+          message: 'iPad 测速失败',
+          hasError: true,
+          playable: false,
+          testedAt: Date.now(),
         };
       }
     }
@@ -289,11 +426,10 @@ export async function getVideoResolutionFromM3u8(m3u8Url: string): Promise<{
 
       const hls = new Hls(hlsConfig);
 
-      const timeoutDuration = isMobile ? 3000 : 4000;
       const timeout = setTimeout(() => {
         cleanup();
         reject(new Error('Timeout loading video metadata'));
-      }, timeoutDuration);
+      }, timeoutMs);
 
       const cleanup = () => {
         clearTimeout(timeout);
@@ -319,6 +455,7 @@ export async function getVideoResolutionFromM3u8(m3u8Url: string): Promise<{
       };
 
       let actualLoadSpeed = '未知';
+      let actualSpeedKBps = 0;  // 新增：保存数值型速度
       let hasSpeedCalculated = false;
       let hasMetadataLoaded = false;
       let fragmentStartTime = 0;
@@ -344,6 +481,12 @@ export async function getVideoResolutionFromM3u8(m3u8Url: string): Promise<{
             quality,
             loadSpeed: actualLoadSpeed,
             pingTime: Math.round(pingTime),
+            speedKBps: actualSpeedKBps > 0 ? actualSpeedKBps : undefined,
+            status: 'ok',
+            message: '测速完成',
+            hasError: false,
+            playable: true,
+            testedAt: Date.now(),
           });
         }
       };
@@ -362,6 +505,7 @@ export async function getVideoResolutionFromM3u8(m3u8Url: string): Promise<{
 
           if (loadTime > 0 && size > 0) {
             const speedKBps = size / 1024 / (loadTime / 1000);
+            actualSpeedKBps = speedKBps;  // 保存数值型速度
             actualLoadSpeed = speedKBps >= 1024
               ? `${(speedKBps / 1024).toFixed(2)} MB/s`
               : `${speedKBps.toFixed(2)} KB/s`;
@@ -451,3 +595,4 @@ export function isSeriesCompleted(remarks?: string): boolean {
   // - 单独的"完"（但不包括"完整"）
   return /完结|已完结|全\d+集|完(?!整)/.test(remarks);
 }
+

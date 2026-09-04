@@ -2,6 +2,7 @@
 
 import { AdminConfig } from './admin.types';
 import { KvrocksStorage } from './kvrocks.db';
+import { SqliteStorage } from './sqlite.db';
 import { RedisStorage } from './redis.db';
 import {
   ContentStat,
@@ -10,6 +11,7 @@ import {
   IStorage,
   PlayRecord,
   PlayStatsResult,
+  Reminder,
   UserPlayStat,
 } from './types';
 import { UpstashRedisStorage } from './upstash.db';
@@ -22,6 +24,7 @@ const STORAGE_TYPE =
     | 'redis'
     | 'upstash'
     | 'kvrocks'
+    | 'sqlite'
     | undefined) || 'localstorage';
 
 // 创建存储实例
@@ -33,6 +36,14 @@ function createStorage(): IStorage {
       return new UpstashRedisStorage();
     case 'kvrocks':
       return new KvrocksStorage();
+    case 'sqlite':
+      if (process.env.EDGEONE_PAGES === '1') {
+        throw new Error(
+          '[LunaTV] SQLite storage is not supported on EdgeOne Pages: the platform has no persistent filesystem. ' +
+          'Please set NEXT_PUBLIC_STORAGE_TYPE to "upstash", "redis", or "kvrocks".'
+        );
+      }
+      return new SqliteStorage();
     case 'localstorage':
     default:
       return null as unknown as IStorage;
@@ -60,6 +71,16 @@ export class DbManager {
 
   constructor() {
     this.storage = getStorage();
+    // 启动时自动触发数据迁移（异步，不阻塞构造）
+    if (this.storage && typeof (this.storage as any).migrateData === 'function') {
+      (this.storage as any).migrateData().then(async () => {
+        if (typeof (this.storage as any).migratePasswords === 'function') {
+          await (this.storage as any).migratePasswords();
+        }
+      }).catch((err: any) => {
+        console.error('数据迁移异常:', err);
+      });
+    }
   }
 
   // 播放记录相关方法
@@ -162,6 +183,46 @@ export class DbManager {
     incrementDbQuery();
     const key = generateStorageKey(source, id);
     await this.storage.deleteFavorite(userName, key);
+  }
+
+  // ==================== 提醒相关方法 ====================
+
+  async getReminder(
+    userName: string,
+    source: string,
+    id: string
+  ): Promise<Reminder | null> {
+    incrementDbQuery();
+    const key = generateStorageKey(source, id);
+    return this.storage.getReminder(userName, key);
+  }
+
+  async saveReminder(
+    userName: string,
+    source: string,
+    id: string,
+    reminder: Reminder
+  ): Promise<void> {
+    incrementDbQuery();
+    const key = generateStorageKey(source, id);
+    await this.storage.setReminder(userName, key, reminder);
+  }
+
+  async getAllReminders(
+    userName: string
+  ): Promise<{ [key: string]: Reminder }> {
+    incrementDbQuery();
+    return this.storage.getAllReminders(userName);
+  }
+
+  async deleteReminder(
+    userName: string,
+    source: string,
+    id: string
+  ): Promise<void> {
+    incrementDbQuery();
+    const key = generateStorageKey(source, id);
+    await this.storage.deleteReminder(userName, key);
   }
 
   // 🚀 批量保存收藏（Upstash 优化，使用 mset 只算1条命令）
@@ -528,11 +589,12 @@ export class DbManager {
   async updateUserLoginStats(
     userName: string,
     loginTime: number,
-    isFirstLogin?: boolean
+    isFirstLogin?: boolean,
+    loginMeta?: { ip?: string; location?: string; device?: string; browser?: string; os?: string }
   ): Promise<void> {
     incrementDbQuery();
     if (typeof (this.storage as any).updateUserLoginStats === 'function') {
-      await (this.storage as any).updateUserLoginStats(userName, loginTime, isFirstLogin);
+      await (this.storage as any).updateUserLoginStats(userName, loginTime, isFirstLogin, loginMeta);
     }
   }
 
@@ -549,7 +611,52 @@ export class DbManager {
     const storageType = process.env.NEXT_PUBLIC_STORAGE_TYPE || 'localstorage';
     return storageType !== 'localstorage';
   }
+
+  // 用户 Emby 配置相关方法
+  async getUserEmbyConfig(userName: string): Promise<any | null> {
+    incrementDbQuery();
+    if (typeof (this.storage as any).getUserEmbyConfig === 'function') {
+      return (this.storage as any).getUserEmbyConfig(userName);
+    }
+    return null;
+  }
+
+  async saveUserEmbyConfig(userName: string, config: any): Promise<void> {
+    incrementDbQuery();
+    if (typeof (this.storage as any).saveUserEmbyConfig === 'function') {
+      await (this.storage as any).saveUserEmbyConfig(userName, config);
+    }
+  }
+
+  async deleteUserEmbyConfig(userName: string): Promise<void> {
+    incrementDbQuery();
+    if (typeof (this.storage as any).deleteUserEmbyConfig === 'function') {
+      await (this.storage as any).deleteUserEmbyConfig(userName);
+    }
+  }
+
+  // 崩溃日志相关方法
+  async saveCrashLog(crashLog: any): Promise<void> {
+    incrementDbQuery();
+    await this.storage.saveCrashLog(crashLog);
+  }
+
+  async getCrashLogs(limit?: number): Promise<any[]> {
+    incrementDbQuery();
+    return this.storage.getCrashLogs(limit);
+  }
+
+  async deleteCrashLog(timestamp: string): Promise<void> {
+    incrementDbQuery();
+    await this.storage.deleteCrashLog(timestamp);
+  }
+
+  async clearCrashLogs(): Promise<void> {
+    incrementDbQuery();
+    await this.storage.clearCrashLogs();
+  }
 }
 
 // 导出默认实例
 export const db = new DbManager();
+export const dbManager = db; // 别名，方便使用

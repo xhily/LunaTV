@@ -13,6 +13,10 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getConfig } from '@/lib/config';
 import { DEFAULT_USER_AGENT } from '@/lib/user-agent';
+import { readTextLimited, validateProxyTargetUrl } from '@/lib/proxy-security';
+
+// CMS 搜索/详情/分类响应体大小硬上限，防止异常上游返回超大响应把内存打爆
+const MAX_RESPONSE_BYTES = 10 * 1024 * 1024; // 10MB
 
 // 使用 Node.js Runtime 以获得更好的网络兼容性
 export const runtime = 'nodejs';
@@ -104,16 +108,20 @@ export async function GET(request: NextRequest) {
       );
     }
 
-    // URL 格式验证
-    let parsedUrl: URL;
+    // SSRF 防护：验证目标 URL（同时也验证了 URL 格式）
+    let validatedUrl: string;
     try {
-      parsedUrl = new URL(targetUrl);
-    } catch {
+      validatedUrl = await validateProxyTargetUrl(targetUrl);
+    } catch (error) {
+      console.error('[CMS Proxy] SSRF validation failed:', error);
       return NextResponse.json(
-        { error: 'Invalid URL format' },
-        { status: 400, headers: getCorsHeaders() }
+        { error: 'Invalid or blocked URL' },
+        { status: 403, headers: getCorsHeaders() }
       );
     }
+
+    // 解析 URL 用于后续检查
+    const parsedUrl = new URL(validatedUrl);
 
     // 白名单检查
     if (!isUrlAllowed(targetUrl)) {
@@ -179,9 +187,14 @@ export async function GET(request: NextRequest) {
     try {
       console.log(`[CMS Proxy] Fetching: ${targetUrl}`);
 
+      // 设置 Referer/Origin 为目标站点的 origin（某些 CMS 会校验）
+      const requestHeaders: Record<string, string> = { ...BROWSER_HEADERS };
+      requestHeaders['Referer'] = `${parsedUrl.origin}/`;
+      requestHeaders['Origin'] = parsedUrl.origin;
+
       const response = await fetch(targetUrl, {
         method: 'GET',
-        headers: BROWSER_HEADERS,
+        headers: requestHeaders,
         signal: controller.signal,
         // @ts-ignore - Node.js fetch 特有选项
         compress: true, // 启用压缩
@@ -202,8 +215,8 @@ export async function GET(request: NextRequest) {
         );
       }
 
-      // 获取响应内容
-      let responseText = await response.text();
+      // 获取响应内容（设大小硬上限，防止异常上游把内存打爆）
+      let responseText = await readTextLimited(response, MAX_RESPONSE_BYTES);
 
       // 清理响应文本（移除 BOM 等）
       responseText = cleanResponseText(responseText);

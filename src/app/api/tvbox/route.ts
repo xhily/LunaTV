@@ -13,9 +13,29 @@ function getBaseUrl(request: NextRequest): string {
   const envBase = (process.env.SITE_BASE || '').trim().replace(/\/$/, '');
   if (envBase) return envBase;
 
-  // Fallback：使用原有逻辑（完全保留）
-  const host = request.headers.get('host') || 'localhost:3000';
-  const protocol = request.headers.get('x-forwarded-proto') || 'http';
+  const requestUrl = new URL(request.url);
+  const forwardedProto = (request.headers.get('x-forwarded-proto') || '')
+    .split(',')[0]
+    .trim();
+  const forwardedHost = (request.headers.get('x-forwarded-host') || '')
+    .split(',')[0]
+    .trim();
+  const forwardedPort = (request.headers.get('x-forwarded-port') || '')
+    .split(',')[0]
+    .trim();
+  const protocol = forwardedProto || requestUrl.protocol.replace(':', '') || 'http';
+  let host = forwardedHost || request.headers.get('host') || requestUrl.host || 'localhost:3000';
+
+  // 如果 x-forwarded-host 没有包含端口，但 x-forwarded-port 指定了非标准端口，补上
+  if (forwardedHost && forwardedPort && !/:\d+$/.test(forwardedHost)) {
+    const isStandardPort =
+      (protocol === 'https' && forwardedPort === '443') ||
+      (protocol === 'http' && forwardedPort === '80');
+    if (!isStandardPort) {
+      host = `${forwardedHost}:${forwardedPort}`;
+    }
+  }
+
   return `${protocol}://${host}`;
 }
 
@@ -771,7 +791,9 @@ export async function GET(request: NextRequest) {
     // 🔑 混合策略：优先使用 Vercel Blob CDN，降级到本地代理
     // Blob CDN: 全球加速，减轻服务器负载（仅 Vercel 部署可用）
     // 本地代理: 兼容所有部署环境，确保 100% 可用
-    let finalSpiderUrl = `${baseUrl}/api/proxy/spider.jar;md5;${jarInfo.md5}`;
+    // 🔑 URL 上带 ?md5= 锁定本次生成的具体版本，避免 config 与代理响应之间
+    // jar 轮换/刷新导致 TVBox 校验 md5 与实际下载字节不一致 (409 由代理端点保护)
+    let finalSpiderUrl = `${baseUrl}/api/proxy/spider.jar?md5=${jarInfo.md5};md5;${jarInfo.md5}`;
 
     // 尝试使用 Blob CDN（仅 Vercel 环境）
     if (!globalSpiderJar) {
@@ -800,10 +822,13 @@ export async function GET(request: NextRequest) {
       }
     }
 
-    // 🔑 处理用户自定义 jar（如果有）
-    if (globalSpiderJar) {
-      const customJarUrl = globalSpiderJar.split(';')[0];
-      console.log(`[Spider] 自定义 jar: ${customJarUrl}，通过代理提供`);
+    // 🔑 处理用户自定义 jar（优先级：全局配置 > 源站配置）
+    const customJarFromConfig = config.CustomSpiderJar; // 从管理后台配置读取
+    const customJarToUse = customJarFromConfig || globalSpiderJar;
+
+    if (customJarToUse) {
+      const customJarUrl = customJarToUse.split(';')[0];
+      console.log(`[Spider] 自定义 jar: ${customJarUrl}${customJarFromConfig ? ' (全局配置)' : ' (源站配置)'}，通过代理提供`);
       // 自定义jar时，如果是IP访问，直接使用自定义URL而不是通过代理
       if (isIPAccess) {
         finalSpiderUrl = `${customJarUrl};md5;${jarInfo.md5}`;
