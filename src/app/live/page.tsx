@@ -1,23 +1,14 @@
-/* eslint-disable @typescript-eslint/ban-ts-comment, @typescript-eslint/no-explicit-any, react-hooks/exhaustive-deps, no-console, @next/next/no-img-element */
+/* eslint-disable react-hooks/exhaustive-deps, no-console, @next/next/no-img-element */
 
 'use client';
 
+import { Box, Tab, Tabs } from '@mui/material';
+import Hls from 'hls.js';
+import { ChevronDown, ChevronUp, Heart, Menu, Radio, RefreshCw, Search, Tv, X } from 'lucide-react';
+import { useRouter, useSearchParams } from 'next/navigation';
 import { Suspense, useCallback, useEffect, useRef, useState } from 'react';
 
-import Hls from 'hls.js';
-import { Heart, Menu, Radio, RefreshCw, Search, Tv, X, ChevronDown, ChevronUp } from 'lucide-react';
-import { useRouter, useSearchParams } from 'next/navigation';
-import { Tabs, Tab, Box } from '@mui/material';
-
-import {
-  debounce,
-} from '@/lib/channel-search';
-import {
-  isMobile,
-  isTablet,
-  isSafari,
-  devicePerformance
-} from '@/lib/utils';
+import { debounce } from '@/lib/channel-search';
 import {
   deleteFavorite,
   generateStorageKey,
@@ -25,13 +16,15 @@ import {
   saveFavorite,
   subscribeToDataUpdates,
 } from '@/lib/db.client';
+import OptimizedHlsLoader from '@/lib/hls-loader';
 import { parseCustomTimeFormat } from '@/lib/time';
+import { devicePerformance, isMobile, isSafari } from '@/lib/utils';
+import { useInView } from '@/hooks/useInView';
+import { useLiveSync } from '@/hooks/useLiveSync';
+import { useTabsDragScroll } from '@/hooks/useTabsDragScroll';
 
 import EpgScrollableRow from '@/components/EpgScrollableRow';
 import PageLayout from '@/components/PageLayout';
-import { useLiveSync } from '@/hooks/useLiveSync';
-import { useTabsDragScroll } from '@/hooks/useTabsDragScroll';
-import { useInView } from '@/hooks/useInView';
 
 // 扩展 HTMLVideoElement 类型以支持 hls 和 flv 属性
 declare global {
@@ -1151,17 +1144,18 @@ function LivePageClient() {
                   target.style.display = 'none';
                   const parent = target.parentElement;
                   if (parent && !parent.querySelector('.fallback-icon')) {
-                    parent.innerHTML = `
-                      <div class="fallback-icon relative w-full h-full flex items-center justify-center">
-                        <svg class="w-5 h-5 text-red-500" fill="currentColor" viewBox="0 0 20 20">
-                          <path d="M2 6a2 2 0 012-2h6a2 2 0 012 2v8a2 2 0 01-2 2H4a2 2 0 01-2-2V6zM14.553 7.106A1 1 0 0014 8v4a1 1 0 00.553.894l2 1A1 1 0 0018 13V7a1 1 0 00-1.447-.894l-2 1z" />
-                        </svg>
-                        <span class="absolute -top-0.5 -right-0.5 flex h-2.5 w-2.5">
-                          <span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-red-400 opacity-75"></span>
-                          <span class="relative inline-flex rounded-full h-2.5 w-2.5 bg-red-500"></span>
-                        </span>
-                      </div>
+                    const fallback = document.createElement('div');
+                    fallback.className = 'fallback-icon relative w-full h-full flex items-center justify-center';
+                    fallback.innerHTML = `
+                      <svg class="w-5 h-5 text-red-500" fill="currentColor" viewBox="0 0 20 20">
+                        <path d="M2 6a2 2 0 012-2h6a2 2 0 012 2v8a2 2 0 01-2 2H4a2 2 0 01-2-2V6zM14.553 7.106A1 1 0 0014 8v4a1 1 0 00.553.894l2 1A1 1 0 0018 13V7a1 1 0 00-1.447-.894l-2 1z" />
+                      </svg>
+                      <span class="absolute -top-0.5 -right-0.5 flex h-2.5 w-2.5">
+                        <span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-red-400 opacity-75"></span>
+                        <span class="relative inline-flex rounded-full h-2.5 w-2.5 bg-red-500"></span>
+                      </span>
                     `;
+                    parent.appendChild(fallback);
                   }
                 }}
               />
@@ -1170,28 +1164,31 @@ function LivePageClient() {
             )}
           </div>
           <div className='flex-1 min-w-0'>
-            <div
-              className='flex items-center gap-1 cursor-pointer select-none group'
-              onClick={(e) => {
-                e.stopPropagation();
-                toggleChannelNameExpanded(channel.id);
-              }}
-            >
+            <div className='flex items-center gap-1'>
               <div className='flex-1 min-w-0'>
                 <div className={`text-sm font-medium text-gray-900 dark:text-gray-100 ${expandedChannels.has(channel.id) ? '' : 'line-clamp-1 md:line-clamp-2'}`}>
                   {channel.name}
                 </div>
               </div>
-              <div className='shrink-0 flex items-center gap-1'>
+              <button
+                type='button'
+                className='shrink-0 flex items-center gap-1 p-1 -mr-1 rounded hover:bg-gray-200 dark:hover:bg-gray-600 transition-colors'
+                onClick={(e) => {
+                  e.stopPropagation();
+                  toggleChannelNameExpanded(channel.id);
+                }}
+                aria-expanded={expandedChannels.has(channel.id)}
+                aria-label={expandedChannels.has(channel.id) ? '收起' : '展开'}
+              >
                 {expandedChannels.has(channel.id) ? (
                   <ChevronUp className='w-4 h-4 text-blue-500 dark:text-blue-400 transition-transform duration-300' />
                 ) : (
-                  <ChevronDown className='w-4 h-4 text-gray-400 dark:text-gray-500 group-hover:text-blue-500 dark:group-hover:text-blue-400 transition-all duration-300' />
+                  <ChevronDown className='w-4 h-4 text-gray-400 dark:text-gray-500 hover:text-blue-500 dark:hover:text-blue-400 transition-all duration-300' />
                 )}
                 <span className='hidden md:inline text-xs text-blue-500 dark:text-blue-400'>
                   {expandedChannels.has(channel.id) ? '收起' : '展开'}
                 </span>
-              </div>
+              </button>
             </div>
             <div className='mt-1 flex items-center gap-1.5 flex-wrap'>
               <span className='text-xs text-gray-500 dark:text-gray-400 truncate' title={channel.group}>
@@ -1640,44 +1637,6 @@ function LivePageClient() {
     }
   }, [selectedGroup, groupedChannels]);
 
-  class CustomHlsJsLoader extends Hls.DefaultConfig.loader {
-    constructor(config: any) {
-      super(config);
-      const load = this.load.bind(this);
-      this.load = function (context: any, config: any, callbacks: any) {
-        // 所有的请求都带一个 source 参数
-        try {
-          const url = new URL(context.url);
-          url.searchParams.set('moontv-source', currentSourceRef.current?.key || '');
-          context.url = url.toString();
-        } catch (error) {
-          // ignore
-        }
-        // 拦截manifest和level请求
-        if (
-          (context as any).type === 'manifest' ||
-          (context as any).type === 'level'
-        ) {
-          // 判断是否浏览器直连
-          const isLiveDirectConnectStr = localStorage.getItem('liveDirectConnect');
-          const isLiveDirectConnect = isLiveDirectConnectStr === 'true';
-          if (isLiveDirectConnect) {
-            // 浏览器直连，使用 URL 对象处理参数
-            try {
-              const url = new URL(context.url);
-              url.searchParams.set('allowCORS', 'true');
-              context.url = url.toString();
-            } catch (error) {
-              // 如果 URL 解析失败，回退到字符串拼接
-              context.url = context.url + '&allowCORS=true';
-            }
-          }
-        }
-        // 执行原始load方法
-        load(context, config, callbacks);
-      };
-    }
-  }
 
   // 错误重试状态管理
   let keyLoadErrorCount = 0;
@@ -1712,10 +1671,14 @@ function LivePageClient() {
     // 基于最新 hls.js 源码和设备性能的智能配置
     const hlsConfig = {
       debug: false,
-      
+
       // Worker 配置 - 根据设备性能和浏览器能力
       enableWorker: !isMobile && !isSafari && devicePerformance !== 'low',
-      
+
+      // iOS 17.1+ 优先使用 ManagedMediaSource 以获得更稳定的 MSE 体验
+      // 参考：https://developer.mozilla.org/en-US/docs/Web/API/ManagedMediaSource
+      preferManagedMediaSource: true,
+
       // 低延迟模式 - 仅在高性能非移动设备上启用 (源码默认为true)
       lowLatencyMode: !isMobile && devicePerformance === 'high',
       
@@ -1749,7 +1712,12 @@ function LivePageClient() {
       
       // 浏览器特殊优化
       liveDurationInfinity: false, // 源码默认，Safari兼容
-      
+
+      // v1.7.0 新增：直播源连续 N 次刷新播放列表无变化时判定为假死，抛出 PLAYLIST_UNCHANGED_ERROR，避免无限轮询死频道
+      liveMaxUnchangedPlaylistRefresh: 5,
+      // v1.7.0 新增：appendBuffer 卡死超时兜底，避免播放静默卡住不报错
+      appendTimeout: 10000,
+
       // 移动设备网络优化 - 使用新的LoadPolicy配置
       ...(isMobile && {
         // 使用 fragLoadPolicy 替代旧的配置方式
@@ -1772,8 +1740,18 @@ function LivePageClient() {
           }
         }
       }),
-      
-      loader: CustomHlsJsLoader,
+
+      /* HLS Loader：直连模式 + 源标识（基于 hls.js 顺序加载设计） */
+      loader: class extends OptimizedHlsLoader {
+        constructor(config: any) {
+          super({
+            ...config,
+            filterAds: false,
+            enableDirectConnect: localStorage.getItem('liveDirectConnect') === 'true',
+            sourceKey: currentSourceRef.current?.key || '',
+          });
+        }
+      },
     };
 
     const hls = new Hls(hlsConfig);
@@ -1853,6 +1831,15 @@ function LivePageClient() {
       if (data.details === Hls.ErrorDetails.BUFFER_INCOMPATIBLE_CODECS_ERROR) {
         console.error('Incompatible codecs error - fatal');
         setUnsupportedType('codec-incompatible');
+        setIsVideoLoading(false);
+        hls.destroy();
+        return;
+      }
+
+      // v1.7.0 新增：直播源连续多次刷新内容无变化（假死），hls.js 已耗尽内部重试预算，主动判定为不可用
+      if (data.details === Hls.ErrorDetails.PLAYLIST_UNCHANGED_ERROR) {
+        console.error('直播源假死（播放列表连续无变化），判定为不可用');
+        setUnsupportedType('channel-unavailable');
         setIsVideoLoading(false);
         hls.destroy();
         return;
@@ -1956,11 +1943,11 @@ function LivePageClient() {
     });
   }
 
-  // FLV 播放器加载函数
+  // FLV 播放器加载函数（使用 mpegts.js）
   function flvLoader(video: HTMLVideoElement, url: string, art: any) {
-    const flvjs = (window as any).DynamicFlvjs;
-    if (!flvjs || !flvjs.isSupported()) {
-      console.error('flv.js 不支持当前浏览器');
+    const mpegts = (window as any).DynamicMpegts;
+    if (!mpegts || !mpegts.isSupported()) {
+      console.error('mpegts.js 不支持当前浏览器');
       return;
     }
 
@@ -1976,7 +1963,7 @@ function LivePageClient() {
       }
     }
 
-    const flvPlayer = flvjs.createPlayer({
+    const flvPlayer = mpegts.createPlayer({
       type: 'flv',
       url: url,
       isLive: true,
@@ -2005,9 +1992,9 @@ function LivePageClient() {
     flvPlayer.load();
     video.flv = flvPlayer;
 
-    flvPlayer.on(flvjs.Events.ERROR, (errorType: string, errorDetail: string) => {
+    flvPlayer.on(mpegts.Events.ERROR, (errorType: string, errorDetail: string) => {
       console.error('FLV Error:', errorType, errorDetail);
-      if (errorType === flvjs.ErrorTypes.NETWORK_ERROR) {
+      if (errorType === mpegts.ErrorTypes.NETWORK_ERROR) {
         flvNetworkRetryCount++;
         console.log(`FLV 网络错误 (${flvNetworkRetryCount}/${MAX_FLV_NETWORK_RETRIES})，尝试重新加载...`);
 
@@ -2033,7 +2020,7 @@ function LivePageClient() {
             console.warn('FLV 重新加载失败:', e);
           }
         }, 2000 * flvNetworkRetryCount);
-      } else if (errorType === flvjs.ErrorTypes.MEDIA_ERROR) {
+      } else if (errorType === mpegts.ErrorTypes.MEDIA_ERROR) {
         console.error('FLV 媒体错误:', errorDetail);
         setUnsupportedType('media-error');
         setIsVideoLoading(false);
@@ -2090,17 +2077,18 @@ function LivePageClient() {
                        videoUrl.includes('/yy/');         // YY源
 
       // 🚀 智能选择直连或代理模式
-      // FLV 流强制使用直连，不走代理
       let targetUrl: string;
-      if (isFlvUrl) {
-        targetUrl = videoUrl;  // FLV 直连
-        console.log(`🎬 播放模式: ⚡ FLV直连 | URL: ${targetUrl.substring(0, 100)}...`);
+      const useDirect = await shouldUseDirectPlayback(videoUrl);
+
+      if (useDirect) {
+        // 直连模式：直接使用原始 URL
+        targetUrl = videoUrl;
+        console.log(`🎬 播放模式: ⚡ 直连 (${isFlvUrl ? 'FLV' : 'M3U8'}) | URL: ${targetUrl.substring(0, 100)}...`);
       } else {
-        const useDirect = await shouldUseDirectPlayback(videoUrl);
-        targetUrl = useDirect
-          ? videoUrl  // 直连模式：直接使用原始 URL
-          : `/api/proxy/m3u8?url=${encodeURIComponent(videoUrl)}&moontv-source=${currentSourceRef.current?.key || ''}`;  // 代理模式
-        console.log(`🎬 播放模式: ${useDirect ? '⚡ 直连' : '🔄 代理'} | URL: ${targetUrl.substring(0, 100)}...`);
+        // 代理模式：FLV 和 M3U8 都通过代理
+        const proxyEndpoint = isFlvUrl ? '/api/proxy/stream' : '/api/proxy/m3u8';
+        targetUrl = `${proxyEndpoint}?url=${encodeURIComponent(videoUrl)}&moontv-source=${currentSourceRef.current?.key || ''}`;
+        console.log(`🎬 播放模式: 🔄 代理 (${isFlvUrl ? 'FLV' : 'M3U8'}) | URL: ${targetUrl.substring(0, 100)}...`);
       }
 
       // 根据 URL 类型选择播放器类型
@@ -2167,6 +2155,7 @@ function LivePageClient() {
         artPlayerRef.current.on('ready', () => {
           setError(null);
           setIsVideoLoading(false);
+          setUnsupportedType(null);
 
           // 延迟检测是否支持 DVR/时移回放（仅在未启用DVR模式时检测）
           if (!enableDvrMode) {
@@ -2253,21 +2242,21 @@ function LivePageClient() {
       }
     }; // 结束 initPlayer 函数
 
-    // 动态导入 ArtPlayer 和 flv.js 并初始化
+    // 动态导入 ArtPlayer 和 mpegts.js 并初始化
     const loadAndInit = async () => {
       try {
         const { default: Artplayer } = await import('artplayer');
 
-        // 动态导入 flv.js（避免 SSR 问题）
-        const flvjs = await import('flv.js');
+        // 动态导入 mpegts.js（避免 SSR 问题）
+        const mpegts = await import('mpegts.js');
 
         // 将导入的模块设置为全局变量供 initPlayer 使用
         (window as any).DynamicArtplayer = Artplayer;
-        (window as any).DynamicFlvjs = flvjs.default;
+        (window as any).DynamicMpegts = mpegts.default;
 
         await initPlayer();
       } catch (error) {
-        console.error('动态导入 ArtPlayer 或 flv.js 失败:', error);
+        console.error('动态导入 ArtPlayer 或 mpegts.js 失败:', error);
         // 不设置错误，只记录日志
       }
     };
@@ -3690,7 +3679,34 @@ const FavoriteIcon = ({ filled }: { filled: boolean }) => {
 export default function LivePage() {
   return (
     <Suspense fallback={<div>Loading...</div>}>
-      <LivePageClient />
+      <LivePageGuard />
     </Suspense>
   );
+}
+
+function LivePageGuard() {
+  const [enabled, setEnabled] = useState<boolean | null>(null);
+
+  useEffect(() => {
+    const runtimeConfig = (window as any).RUNTIME_CONFIG;
+    setEnabled(!!runtimeConfig?.ENABLE_WEB_LIVE);
+  }, []);
+
+  if (enabled === null) {
+    return <div>Loading...</div>;
+  }
+
+  if (!enabled) {
+    return (
+      <PageLayout>
+        <div className='flex flex-col items-center justify-center min-h-[60vh] text-gray-500 dark:text-gray-400'>
+          <Radio className='h-16 w-16 mb-4 opacity-30' />
+          <h2 className='text-xl font-semibold mb-2'>直播功能未开启</h2>
+          <p className='text-sm opacity-70'>请联系管理员开启直播功能</p>
+        </div>
+      </PageLayout>
+    );
+  }
+
+  return <LivePageClient />;
 }

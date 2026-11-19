@@ -5,18 +5,13 @@ import { Clock, Trash2 } from 'lucide-react';
 import { useEffect, useState, memo } from 'react';
 
 import type { PlayRecord } from '@/lib/db.client';
+// 🚀 TanStack Query Mutations
+import { useClearPlayRecordsMutation } from '@/hooks/usePlayRecordsMutations';
+// 🚀 TanStack Query Queries
 import {
-  clearAllPlayRecords,
-  getAllPlayRecords,
-  subscribeToDataUpdates,
-  forceRefreshPlayRecordsCache,
-} from '@/lib/db.client';
-import {
-  getDetailedWatchingUpdates,
-  subscribeToWatchingUpdatesEvent,
-  checkWatchingUpdates,
-  type WatchingUpdate,
-} from '@/lib/watching-updates';
+  useContinueWatchingQuery,
+  useWatchingUpdatesQuery,
+} from '@/hooks/useContinueWatchingQueries';
 
 import ScrollableRow from '@/components/ScrollableRow';
 import SectionTitle from '@/components/SectionTitle';
@@ -29,13 +24,19 @@ interface ContinueWatchingProps {
 
 // 🚀 优化方案6：使用React.memo防止不必要的重渲染
 function ContinueWatching({ className }: ContinueWatchingProps) {
-  const [playRecords, setPlayRecords] = useState<
-    (PlayRecord & { key: string })[]
-  >([]);
-  const [loading, setLoading] = useState(true);
-  const [watchingUpdates, setWatchingUpdates] = useState<WatchingUpdate | null>(null);
   const [requireClearConfirmation, setRequireClearConfirmation] = useState(false);
   const [showConfirmDialog, setShowConfirmDialog] = useState(false);
+
+  // 🚀 TanStack Query - 播放记录
+  const { data: playRecords = [], isLoading: loading } = useContinueWatchingQuery();
+
+  // 🚀 TanStack Query - 观看更新（仅当有播放记录时才查询）
+  const { data: watchingUpdates = null } = useWatchingUpdatesQuery({
+    enabled: !loading && playRecords.length > 0
+  });
+
+  // 🚀 TanStack Query - 使用 useMutation 管理清空播放记录操作
+  const clearPlayRecordsMutation = useClearPlayRecordsMutation();
 
   // 读取清空确认设置
   useEffect(() => {
@@ -46,109 +47,6 @@ function ContinueWatching({ className }: ContinueWatchingProps) {
       }
     }
   }, []);
-
-  // 处理播放记录数据更新的函数
-  const updatePlayRecords = (allRecords: Record<string, PlayRecord>) => {
-    // 将记录转换为数组并根据 save_time 由近到远排序
-    const recordsArray = Object.entries(allRecords).map(([key, record]) => ({
-      ...record,
-      key,
-    }));
-
-    // 按 save_time 降序排序（最新的在前面）
-    const sortedRecords = recordsArray.sort(
-      (a, b) => b.save_time - a.save_time
-    );
-
-    setPlayRecords(sortedRecords);
-  };
-
-  useEffect(() => {
-    const fetchPlayRecords = async () => {
-      try {
-        setLoading(true);
-
-        // 从缓存或API获取所有播放记录
-        const allRecords = await getAllPlayRecords();
-        updatePlayRecords(allRecords);
-      } catch (error) {
-        console.error('获取播放记录失败:', error);
-        setPlayRecords([]);
-      } finally {
-        setLoading(false);
-      }
-    };
-
-    fetchPlayRecords();
-
-    // 监听播放记录更新事件
-    const unsubscribe = subscribeToDataUpdates(
-      'playRecordsUpdated',
-      (newRecords: Record<string, PlayRecord>) => {
-        updatePlayRecords(newRecords);
-      }
-    );
-
-    return unsubscribe;
-  }, []);
-
-  // 获取watching updates数据（仅当有播放记录时）
-  useEffect(() => {
-    // 只有在有播放记录时才检查更新
-    if (loading || playRecords.length === 0) {
-      return;
-    }
-
-    const updateWatchingUpdates = async () => {
-      console.log('ContinueWatching: 开始获取更新数据...');
-
-      // 先尝试从缓存加载（快速显示）
-      let updates = getDetailedWatchingUpdates();
-      console.log('ContinueWatching: 缓存数据:', updates);
-
-      if (updates) {
-        setWatchingUpdates(updates);
-        console.log('ContinueWatching: 使用缓存数据');
-      }
-
-      // 如果缓存为空，主动检查一次
-      if (!updates) {
-        console.log('ContinueWatching: 缓存为空，主动检查更新...');
-        try {
-          await checkWatchingUpdates();
-          updates = getDetailedWatchingUpdates();
-          setWatchingUpdates(updates);
-          console.log('ContinueWatching: 主动检查完成，获得数据:', updates);
-        } catch (error) {
-          console.error('ContinueWatching: 主动检查更新失败:', error);
-        }
-      }
-    };
-
-    // 初始加载
-    updateWatchingUpdates();
-
-    // 🔧 优化：订阅播放记录更新事件，实时同步数据
-    const unsubscribePlayRecords = subscribeToDataUpdates(
-      'playRecordsUpdated',
-      (newRecords: Record<string, PlayRecord>) => {
-        console.log('ContinueWatching: 收到播放记录更新事件，立即同步数据');
-        updatePlayRecords(newRecords);
-      }
-    );
-
-    // 订阅watching updates事件
-    const unsubscribeWatchingUpdates = subscribeToWatchingUpdatesEvent(() => {
-      console.log('ContinueWatching: 收到watching updates更新事件');
-      const updates = getDetailedWatchingUpdates();
-      setWatchingUpdates(updates);
-    });
-
-    return () => {
-      unsubscribePlayRecords();
-      unsubscribeWatchingUpdates();
-    };
-  }, [loading, playRecords.length]); // 依赖播放记录加载状态
 
   // 如果没有播放记录，则不渲染组件
   if (!loading && playRecords.length === 0) {
@@ -195,16 +93,18 @@ function ContinueWatching({ className }: ContinueWatchingProps) {
       series.videoId === id
     );
 
-    // 如果找到匹配的剧集且有最新集数信息，返回最新集数；否则返回原始集数
-    return matchedSeries && matchedSeries.totalEpisodes
-      ? matchedSeries.totalEpisodes
+    // 如果找到匹配的剧集且有最新集数信息，返回最新集数（使用 latestEpisodes，包含了 protectedTotalEpisodes）
+    return matchedSeries && matchedSeries.latestEpisodes
+      ? matchedSeries.latestEpisodes
       : record.total_episodes;
   };
 
   // 处理清空所有记录
-  const handleClearAll = async () => {
-    await clearAllPlayRecords();
-    setPlayRecords([]);
+  const handleClearAll = () => {
+    // 🚀 使用 mutation.mutate() 清空播放记录
+    // 特性：立即清空 UI（乐观更新），失败时自动回滚
+    clearPlayRecordsMutation.mutate();
+    setShowConfirmDialog(false);
   };
 
   return (
@@ -280,11 +180,6 @@ function ContinueWatching({ className }: ContinueWatchingProps) {
                       currentEpisode={record.index}
                       query={record.search_title}
                       from='playrecord'
-                      onDelete={() =>
-                        setPlayRecords((prev) =>
-                          prev.filter((r) => r.key !== record.key)
-                        )
-                      }
                       type={cardType}
                       remarks={record.remarks}
                       priority={index < 4}

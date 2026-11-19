@@ -38,9 +38,14 @@ export async function POST(request: NextRequest) {
       DoubanProxy,
       DoubanImageProxyType,
       DoubanImageProxy,
+      BangumiApiType,
+      BangumiApiProxy,
+      BangumiImageProxyType,
+      BangumiImageProxy,
       DisableYellowFilter,
       ShowAdultContent,
       FluidSearch,
+      EnableWebLive,
       EnablePuppeteer,
       DoubanCookies,
       TMDBApiKey,
@@ -56,9 +61,14 @@ export async function POST(request: NextRequest) {
       DoubanProxy: string;
       DoubanImageProxyType: string;
       DoubanImageProxy: string;
+      BangumiApiType?: string;
+      BangumiApiProxy?: string;
+      BangumiImageProxyType?: string;
+      BangumiImageProxy?: string;
       DisableYellowFilter: boolean;
       ShowAdultContent: boolean;
       FluidSearch: boolean;
+      EnableWebLive: boolean;
       EnablePuppeteer: boolean;
       DoubanCookies?: string;
       TMDBApiKey?: string;
@@ -114,9 +124,14 @@ export async function POST(request: NextRequest) {
       DoubanProxy,
       DoubanImageProxyType,
       DoubanImageProxy,
+      BangumiApiType: BangumiApiType || 'server',
+      BangumiApiProxy: BangumiApiProxy || '',
+      BangumiImageProxyType: BangumiImageProxyType || 'server',
+      BangumiImageProxy: BangumiImageProxy || '',
       DisableYellowFilter,
       ShowAdultContent,
       FluidSearch,
+      EnableWebLive: EnableWebLive ?? false,
       TMDBApiKey: TMDBApiKey || '',
       TMDBLanguage: TMDBLanguage || 'zh-CN',
       EnableTMDBActorSearch: EnableTMDBActorSearch || false,

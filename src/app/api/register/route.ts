@@ -1,8 +1,10 @@
 /* eslint-disable no-console,@typescript-eslint/no-explicit-any */
 import { NextRequest, NextResponse } from 'next/server';
 
+import { generateAuthCookie } from '@/lib/auth';
 import { clearConfigCache, getConfig } from '@/lib/config';
 import { db } from '@/lib/db';
+import { useInviteCode, validateInviteCode } from '@/lib/invite-code';
 
 export const runtime = 'nodejs';
 
@@ -13,59 +15,11 @@ const STORAGE_TYPE =
     | 'redis'
     | 'upstash'
     | 'kvrocks'
+    | 'sqlite'
     | undefined) || 'localstorage';
 
-// 生成签名
-async function generateSignature(
-  data: string,
-  secret: string
-): Promise<string> {
-  const encoder = new TextEncoder();
-  const keyData = encoder.encode(secret);
-  const messageData = encoder.encode(data);
-
-  // 导入密钥
-  const key = await crypto.subtle.importKey(
-    'raw',
-    keyData,
-    { name: 'HMAC', hash: 'SHA-256' },
-    false,
-    ['sign']
-  );
-
-  // 生成签名
-  const signature = await crypto.subtle.sign('HMAC', key, messageData);
-
-  // 转换为十六进制字符串
-  return Array.from(new Uint8Array(signature))
-    .map((b) => b.toString(16).padStart(2, '0'))
-    .join('');
-}
-
-// 生成认证Cookie（带签名）
-async function generateAuthCookie(
-  username?: string,
-  password?: string,
-  role?: 'owner' | 'admin' | 'user',
-  includePassword = false
-): Promise<string> {
-  const authData: any = { role: role || 'user' };
-
-  // 只在需要时包含 password
-  if (includePassword && password) {
-    authData.password = password;
-  }
-
-  if (username && process.env.PASSWORD) {
-    authData.username = username;
-    // 使用密码作为密钥对用户名进行签名
-    const signature = await generateSignature(username, process.env.PASSWORD);
-    authData.signature = signature;
-    authData.timestamp = Date.now(); // 添加时间戳防重放攻击
-  }
-
-  return encodeURIComponent(JSON.stringify(authData));
-}
+// generateSignature / generateAuthCookie 统一使用 @/lib/auth 中的实现
+// （cookie 不存明文密码，改存 HMAC 哈希）
 
 export async function POST(req: NextRequest) {
   try {
@@ -77,19 +31,38 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    const { username, password, confirmPassword } = await req.json();
+    const { username, password, confirmPassword, inviteCode } = await req.json();
 
     // 先检查配置中是否允许注册（在验证输入之前）
     let config: any;
     try {
       config = await getConfig();
       const allowRegister = config.UserConfig?.AllowRegister !== false; // 默认允许注册
+      const requireInviteCode = config.UserConfig?.RequireInviteCode === true; // 默认不需要邀请码
 
       if (!allowRegister) {
         return NextResponse.json(
           { error: '管理员已关闭用户注册功能' },
           { status: 403 }
         );
+      }
+
+      // 如果启用了邀请码系统，验证邀请码
+      if (requireInviteCode) {
+        if (!inviteCode || typeof inviteCode !== 'string') {
+          return NextResponse.json(
+            { error: '请输入邀请码' },
+            { status: 400 }
+          );
+        }
+
+        const validation = await validateInviteCode(inviteCode.trim().toUpperCase());
+        if (!validation.valid) {
+          return NextResponse.json(
+            { error: validation.error || '邀请码无效' },
+            { status: 400 }
+          );
+        }
       }
     } catch (err) {
       console.error('检查注册配置失败', err);
@@ -157,6 +130,17 @@ export async function POST(req: NextRequest) {
         await db.registerUser(username, password);
       }
 
+      // 如果启用了邀请码系统，标记邀请码已使用
+      const requireInviteCode = config.UserConfig?.RequireInviteCode === true;
+      if (requireInviteCode && inviteCode) {
+        try {
+          await useInviteCode(inviteCode.trim().toUpperCase(), username);
+        } catch (inviteErr) {
+          console.error('标记邀请码使用失败:', inviteErr);
+          // 不影响注册流程，只记录错误
+        }
+      }
+
       // 清除缓存，让 configSelfCheck 从数据库同步最新用户列表（包括 tags）
       clearConfigCache();
 
@@ -179,8 +163,8 @@ export async function POST(req: NextRequest) {
       
       const cookieValue = await generateAuthCookie(
         username,
-        password,
         'user',
+        password,
         false
       );
       const expires = new Date();
